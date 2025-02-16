@@ -1,0 +1,335 @@
+#!/usr/bin/env python3
+import argparse
+import subprocess
+import os
+import sys
+from datetime import datetime, date, timedelta
+import webbrowser
+
+
+def check_git_installed():
+    """
+    Check if the 'git' command is available in the system.
+    Exits with an error message if not found.
+    """
+    try:
+        subprocess.run(
+            ["git", "--version"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        )
+    except FileNotFoundError:
+        print(
+            "Error: 'git' command not found. Please install Git and ensure it is in your PATH.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    except subprocess.CalledProcessError:
+        print("Error: 'git' command encountered an error.", file=sys.stderr)
+        sys.exit(1)
+
+
+def is_git_repository(repo_path):
+    """
+    Check if the given path is a directory and a valid Git repository.
+    """
+    if not os.path.isdir(repo_path):
+        return False
+    try:
+        subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=repo_path,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        )
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
+def get_commit_dates(repo_path):
+    """
+    Retrieve commit dates from the given Git repository using 'git log'.
+
+    Returns:
+        A list of datetime.date objects representing the commit dates.
+    """
+    try:
+        result = subprocess.check_output(
+            ["git", "log", "--all", "--pretty=format:%cd", "--date=short"],
+            cwd=repo_path,
+            stderr=subprocess.DEVNULL,
+            encoding="utf-8",
+        )
+    except subprocess.CalledProcessError:
+        print(f"Warning: Could not retrieve git log from {repo_path}.", file=sys.stderr)
+        return []
+
+    dates = []
+    for line in result.splitlines():
+        line = line.strip()
+        if line:
+            try:
+                d = datetime.strptime(line, "%Y-%m-%d").date()
+                dates.append(d)
+            except ValueError:
+                print(f"Warning: Failed to parse date: {line}", file=sys.stderr)
+    return dates
+
+
+def aggregate_commits(repo_paths):
+    """
+    Aggregate commit counts from multiple Git repositories.
+
+    Args:
+        repo_paths: List of valid Git repository paths.
+
+    Returns:
+        A dictionary with datetime.date keys and commit count values.
+    """
+    commit_dict = {}
+    for repo in repo_paths:
+        dates = get_commit_dates(repo)
+        for d in dates:
+            commit_dict[d] = commit_dict.get(d, 0) + 1
+    return commit_dict
+
+
+def get_color_for_count(count):
+    """
+    Return the GitHub-style color based on the commit count.
+
+    Colors:
+      0:    #ebedf0
+      1-3:  #c6e48b
+      4-6:  #7bc96f
+      7-9:  #239a3b
+      10+:  #317547
+    """
+    if count == 0:
+        return "#ebedf0"
+    elif 1 <= count <= 3:
+        return "#c6e48b"
+    elif 4 <= count <= 6:
+        return "#7bc96f"
+    elif 7 <= count <= 9:
+        return "#239a3b"
+    else:
+        return "#317547"
+
+
+def generate_contributions_grid(commit_dict, start_date, end_date):
+    """
+    Generate a grid for the contributions graph along with corresponding dates.
+
+    The grid starts on the Sunday before start_date and ends on the Saturday after end_date.
+
+    Returns:
+        grid: A list of weeks, each a list of commit counts (or None for out-of-range days).
+        date_grid: A parallel grid with corresponding dates.
+        grid_start: The starting date of the grid.
+        grid_end: The ending date of the grid.
+    """
+    # Determine the nearest Sunday before start_date
+    offset = (start_date.weekday() + 1) % 7
+    grid_start = start_date - timedelta(days=offset)
+
+    # Determine the nearest Saturday after end_date
+    end_offset = (6 - ((end_date.weekday() + 1) % 7)) % 7
+    grid_end = end_date + timedelta(days=end_offset)
+
+    num_days = (grid_end - grid_start).days + 1
+    num_weeks = num_days // 7
+
+    grid = []
+    date_grid = []
+    for w in range(num_weeks):
+        week_data = []
+        week_dates = []
+        for d in range(7):
+            this_date = grid_start + timedelta(days=w * 7 + d)
+            if start_date <= this_date <= end_date:
+                week_data.append(commit_dict.get(this_date, 0))
+            else:
+                week_data.append(None)
+            week_dates.append(this_date)
+        grid.append(week_data)
+        date_grid.append(week_dates)
+    return grid, date_grid, grid_start, grid_end
+
+
+def draw_contributions_svg_html(grid, date_grid, start_date, end_date, output_file):
+    """
+    Draw the contributions graph as an SVG embedded in an HTML file.
+
+    Settings:
+      - Each cell is 10px x 10px with a 2px gap.
+      - The top margin is used for month labels.
+      - The left margin is used for weekday labels.
+      - The vertical axis is arranged with Sunday at the top.
+      - Each cell has a slight rounded corner (rx and ry set to 1).
+
+    Args:
+        grid: The grid of commit counts.
+        date_grid: The grid of corresponding dates.
+        start_date: Start date of the graph.
+        end_date: End date of the graph.
+        output_file: The filename to write the HTML output.
+
+    Returns:
+        The output filename.
+    """
+    num_weeks = len(grid)
+    cell_size = 10
+    gap = 2
+    extra_y = 15  # Top margin for month labels
+    label_margin = 30  # Left margin for weekday labels
+
+    width = label_margin + gap + num_weeks * (cell_size + gap) + gap
+    height = extra_y + gap + 7 * (cell_size + gap) + gap
+
+    svg_elements = []
+    svg_elements.append(
+        f'<svg width="{width}" height="{height}" xmlns="http://www.w3.org/2000/svg">'
+    )
+    # Background
+    svg_elements.append(
+        f'<rect x="0" y="0" width="{width}" height="{height}" fill="white" />'
+    )
+
+    # Draw cells (vertical axis: Sunday at the top)
+    for week in range(num_weeks):
+        for day in range(7):
+            x = label_margin + gap + week * (cell_size + gap)
+            y = extra_y + gap + day * (cell_size + gap)
+            val = grid[week][day]
+            fill_color = "white" if val is None else get_color_for_count(val)
+            # Add a slight rounded corner using rx and ry
+            svg_elements.append(
+                f'<rect x="{x}" y="{y}" width="{cell_size}" height="{cell_size}" fill="{fill_color}" rx="1" ry="1" />'
+            )
+
+    # Add month labels at the top (if the cell corresponds to the first day of the month)
+    last_month = None
+    for week in range(num_weeks):
+        week_dates = date_grid[week]
+        for d in week_dates:
+            if start_date <= d <= end_date and d.day == 1:
+                if d.month != last_month:
+                    x = label_margin + gap + week * (cell_size + gap)
+                    svg_elements.append(
+                        f'<text x="{x}" y="{extra_y - 5}" font-size="10" fill="black">{d.strftime("%b")}</text>'
+                    )
+                    last_month = d.month
+                    break
+
+    # Add weekday labels on the left (Mon, Wed, Fri)
+    # Note: The vertical order is Sunday at top (index 0) to Saturday at bottom (index 6)
+    day_labels = {1: "Mon", 3: "Wed", 5: "Fri"}
+    for day, label in day_labels.items():
+        y = (
+            extra_y + gap + day * (cell_size + gap) + cell_size / 2 + 4
+        )  # Adjusted for vertical centering
+        svg_elements.append(
+            f'<text x="{label_margin - 5}" y="{y}" font-size="10" text-anchor="end" fill="black">{label}</text>'
+        )
+
+    svg_elements.append("</svg>")
+    svg_content = "\n".join(svg_elements)
+
+    # Embed the SVG in an HTML template
+    html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Git Contributions</title>
+</head>
+<body>
+{svg_content}
+</body>
+</html>
+"""
+    with open(output_file, "w", encoding="utf-8") as f:
+        f.write(html_content)
+    print(f"Contributions graph saved to {output_file}.")
+    return output_file
+
+
+def main():
+    # Check if git command is available
+    check_git_installed()
+
+    parser = argparse.ArgumentParser(
+        description="Generate a GitHub-style contributions graph from local Git repositories and output it as HTML with embedded SVG."
+    )
+    parser.add_argument(
+        "repos",
+        metavar="REPO_PATH",
+        type=str,
+        nargs="+",
+        help="Path(s) to Git repositories (multiple allowed).",
+    )
+    parser.add_argument(
+        "--output",
+        "-o",
+        type=str,
+        default="contributions.html",
+        help="Output HTML file name (default: contributions.html).",
+    )
+    parser.add_argument(
+        "--days",
+        "-d",
+        type=int,
+        default=365,
+        help="Number of days to include in the graph (default: 365).",
+    )
+    parser.add_argument(
+        "--open",
+        "-w",
+        action="store_true",
+        help="Open the generated HTML in a web browser.",
+    )
+    args = parser.parse_args()
+
+    valid_repos = []
+    for repo in args.repos:
+        if not os.path.isdir(repo):
+            print(f"Warning: {repo} is not a directory. Skipping.", file=sys.stderr)
+            continue
+        if not is_git_repository(repo):
+            print(
+                f"Warning: {repo} is not a valid Git repository. Skipping.",
+                file=sys.stderr,
+            )
+            continue
+        valid_repos.append(repo)
+
+    if not valid_repos:
+        print("No valid Git repositories found.", file=sys.stderr)
+        sys.exit(1)
+
+    commit_dict = aggregate_commits(valid_repos)
+    if not commit_dict:
+        print("No commits found.", file=sys.stderr)
+        sys.exit(1)
+
+    end_date = date.today()
+    start_date = end_date - timedelta(days=args.days - 1)
+    grid, date_grid, grid_start, grid_end = generate_contributions_grid(
+        commit_dict, start_date, end_date
+    )
+    output_file = draw_contributions_svg_html(
+        grid, date_grid, start_date, end_date, args.output
+    )
+
+    if args.open:
+        abs_path = os.path.abspath(output_file)
+        url = "file://" + abs_path
+        print(f"Opening {url} in web browser...", file=sys.stderr)
+        webbrowser.open(url)
+
+
+if __name__ == "__main__":
+    main()
