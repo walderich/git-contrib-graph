@@ -49,7 +49,7 @@ def is_git_repository(repo_path):
         return False
 
 
-def get_commit_dates(repo_path):
+def get_commit_dates(repo_path, commit_args):
     """
     Retrieve commit dates from the given Git repository using 'git log'.
 
@@ -58,7 +58,7 @@ def get_commit_dates(repo_path):
     """
     try:
         result = subprocess.check_output(
-            ["git", "log", "--all", "--pretty=format:%cd", "--date=short"],
+            ["git", "log", "--all", "--pretty=format:%cd", "--date=short"] + commit_args,
             cwd=repo_path,
             stderr=subprocess.DEVNULL,
             encoding="utf-8",
@@ -79,7 +79,7 @@ def get_commit_dates(repo_path):
     return dates
 
 
-def aggregate_commits(repo_paths):
+def aggregate_commits(repo_paths, commit_args):
     """
     Aggregate commit counts from multiple Git repositories.
 
@@ -91,7 +91,7 @@ def aggregate_commits(repo_paths):
     """
     commit_dict = {}
     for repo in repo_paths:
-        dates = get_commit_dates(repo)
+        dates = get_commit_dates(repo, commit_args)
         for d in dates:
             commit_dict[d] = commit_dict.get(d, 0) + 1
     return commit_dict
@@ -292,6 +292,13 @@ def main():
         help="Number of days to include in the graph (default: 365).",
     )
     parser.add_argument(
+        "--author",
+        "-a",
+        nargs="*",
+        default=[],
+        help="Author of the commit to include in graph (default: all)",
+    )
+    parser.add_argument(
         "--open",
         "-w",
         action="store_true",
@@ -312,11 +319,13 @@ def main():
             continue
         valid_repos.append(repo)
 
+    authors = [f"--author={item}" for item in args.author if item]
+
     if not valid_repos:
         print("No valid Git repositories found.", file=sys.stderr)
         sys.exit(1)
 
-    commit_dict = aggregate_commits(valid_repos)
+    commit_dict = aggregate_commits(valid_repos, authors)
     if not commit_dict:
         print("No commits found.", file=sys.stderr)
         sys.exit(1)
