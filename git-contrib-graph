@@ -207,9 +207,15 @@ def draw_contributions_svg_html(grid, date_grid, start_date, end_date, output_fi
             val = grid[week][day]
             fill_color = "white" if val is None else get_color_for_count(val)
             # Add a slight rounded corner using rx and ry
-            svg_elements.append(
-                f'<rect x="{x}" y="{y}" width="{cell_size}" height="{cell_size}" fill="{fill_color}" rx="1" ry="1" />'
-            )
+            if val:
+                svg_elements.append(
+                    f'<rect x="{x}" y="{y}" width="{cell_size}" height="{cell_size}" fill="{fill_color}" rx="1" ry="1">' +
+                        f'<title>{val} commit(s)</title></rect>'
+                )
+            else:
+                svg_elements.append(
+                    f'<rect x="{x}" y="{y}" width="{cell_size}" height="{cell_size}" fill="{fill_color}" rx="1" ry="1" />'
+                )
 
     # Add month labels at the top (if the cell corresponds to the first day of the month)
     last_month = None
