@@ -38,6 +38,7 @@ git-contrib-graph /path/to/repo1 /path/to/repo2 -o contributions.html --open
 - `REPO_PATH`: Path(s) to local Git repositories (multiple allowed).
 - `-o`, `--output`: Output HTML file name (default: `contributions.html`).
 - `-d`, `--days`: Number of days to include in the graph (default: `365`).
+- `-a`, `--author`: Author(s) to include in graph (default: all).
 - `-w`, `--open`: Automatically open the generated HTML file in your web browser.
 
 ## License
